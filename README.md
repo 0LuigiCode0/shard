@@ -1,0 +1,2 @@
+# idmpt
+idempotent of cashe
