@@ -7,7 +7,7 @@
 *.rsuser
 *.suo
 *.user
-*.userosscache
+*.userosshard
 *.sln.docstates
 
 # User-specific files (MonoDevelop/Xamarin Studio)
@@ -396,3 +396,6 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+*.out
+*.exe

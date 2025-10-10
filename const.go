@@ -1,39 +1,27 @@
-package idmpt
+package shard
 
 import (
 	"errors"
-)
-
-// Статус записей в кеше
-type state int
-
-const (
-	lock state = iota
-	save
+	"time"
 )
 
 //
 
 var (
-	// дефолтный минимальный размер кеша
-	sizeStore   = 256
-	reasonError = "cache error"
-
-	// Ключ для хедера
-	HeaderIdempotentKey = "X-MTS-IDMPT-KEY"
+	// дефолтное количество	шардаов
+	countShard = 128
+	// дефолтный минимальный размер шарда
+	sizeShard = 128
+	// дефолтное ttl
+	ttl = time.Minute
+	// дефолтная задержка проверки просрочки
+	expireDelay = time.Minute
 )
 
 //
 
 var (
-	LockExistsError     = errors.New("lock already exists")
-	LockNotFoundError   = errors.New("lock not found")
-	LockExistsSaveError = errors.New("can't create lock, item already save")
-	ItemExistsError     = errors.New("item already exists")
-	ItemNotFound        = errors.New("item not found")
-	ItemExpiredError    = errors.New("item already expired")
-)
-
-const (
-	CacheErrorCode = iota + 100
+	ErrItemExists   = errors.New("item already exists")
+	ErrItemNotFound = errors.New("item not found")
+	ErrItemExpired  = errors.New("item already expired")
 )

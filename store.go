@@ -1,170 +1,183 @@
-package idmpt
+package shard
 
 import (
+	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
-
-	"github.com/google/uuid"
 )
 
-type IStore interface {
-	// Получить данные по ключу
-	Get(key uuid.UUID) (data []byte, err error)
-	// Сохранить данные по ключу
-	Set(key uuid.UUID, data []byte) error
-	// Создать презапись сохранения данных
-	Lock(key uuid.UUID) error
-	// Удалить презапись сохранения данных
-	Unlock(key uuid.UUID)
-	Reset()
-	Clear()
+type (
+	keyStr interface{ ~string }
+	keyNum interface {
+		~int | ~int8 | ~int16 | ~int32 | ~int64 |
+			~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
+			~float32 | ~float64
+	}
+	keySeq[t keyNum] interface {
+		~[1]t | ~[2]t | ~[3]t | ~[4]t | ~[5]t | ~[6]t | ~[7]t | ~[8]t |
+			~[9]t | ~[10]t | ~[11]t | ~[12]t | ~[13]t | ~[14]t | ~[15]t | ~[16]t |
+			~[17]t | ~[18]t | ~[19]t | ~[20]t | ~[21]t | ~[22]t | ~[23]t | ~[24]t |
+			~[25]t | ~[26]t | ~[27]t | ~[28]t | ~[29]t | ~[30]t | ~[31]t | ~[32]t
+	}
+	_key[t keyNum] interface {
+		keyNum | keySeq[t] | keyStr
+	}
+)
+
+type (
+	storeNum[k keyNum, v any]              struct{ store[k, k, v] }
+	storeSeq[t keyNum, k keySeq[t], v any] struct{ store[t, k, v] }
+	storeStr[k keyStr, v any]              struct{ store[byte, k, v] }
+)
+
+type store[t keyNum, k _key[t], v any] struct {
+	shards []*shard[t, k, v]
+	rw     sync.RWMutex
+	stop   chan struct{}
+
+	opt option
 }
 
-type store struct {
-	m  map[byte]*bucket
+type shard[t keyNum, k _key[t], v any] struct {
+	m  map[k]*item[v]
 	rw sync.RWMutex
-
-	countBucket byte
-	ttl         time.Duration
-	ttlLock     time.Duration
-	unique      bool
-
-	minCount  atomic.Int32
-	minBucket byte
 }
 
-type bucket struct {
-	m  map[uuid.UUID]*storeItem
-	rw sync.RWMutex
-
-	count atomic.Int32
+type item[v any] struct {
+	data v
+	ttl  int64
 }
 
-type storeItem struct {
-	data   []byte
-	ttl    int64
-	isSave bool
+func (s *storeNum[k, v]) Get(key k) (data v, err error) {
+	return s.get(shardNum(s.opt.countShard, key), key)
 }
 
-func NewStore(countBucket byte, opts ...option) IStore {
-	s := new(store)
-	if countBucket == 0 {
-		countBucket = 8
-	}
-	s.m = make(map[byte]*bucket, countBucket)
-	for i := byte(0); i < 8; i++ {
-		s.m[i] = &bucket{
-			m: make(map[uuid.UUID]*storeItem, 128),
-		}
-	}
-	s.countBucket = countBucket
-	s.ttl = time.Hour
-	s.ttlLock = time.Second * 10
+func (s *storeSeq[t, k, v]) Get(key k) (data v, err error) {
+	return s.get(shardSeq[t](s.opt.countShard, key), key)
+}
 
-	for _, opt := range opts {
-		opt(s)
-	}
+func (s *storeStr[k, v]) Get(key k) (data v, err error) {
+	return s.get(shardStr(s.opt.countShard, key), key)
+}
 
-	return s
+func (s *storeNum[k, v]) Set(key k, data v) error {
+	return s.set(shardNum(s.opt.countShard, key), key, data)
+}
+
+func (s *storeSeq[t, k, v]) Set(key k, data v) error {
+	return s.set(shardSeq[t](s.opt.countShard, key), key, data)
+}
+
+func (s *storeStr[k, v]) Set(key k, data v) error {
+	return s.set(shardStr(s.opt.countShard, key), key, data)
 }
 
 // Получить данные по ключу
-func (s *store) Get(key uuid.UUID) (data []byte, err error) {
-	if item, ok := s.m[key[0]%s.countBucket].m[key]; ok {
-		if item.isSave {
-			if time.Now().UnixNano() < item.ttl {
-				return item.data, nil
-			}
-			return nil, ItemExpiredError
-		} else {
-			return nil, LockExistsError
+func (s *store[t, k, v]) get(shardNum int, key k) (data v, err error) {
+	sh := s.shards[shardNum]
+	now := time.Now()
+	sh.rw.RLock()
+	defer sh.rw.RUnlock()
+
+	if item, ok := sh.m[key]; ok {
+		if now.UnixNano() < item.ttl {
+			return item.data, nil
 		}
+		return def[v](), ErrItemExpired
+
 	}
-	return nil, ItemNotFound
+	return def[v](), ErrItemNotFound
 }
 
-// Сохранить данные по ключу
-func (s *store) Set(key uuid.UUID, data []byte) error {
-	bucket := s.m[key[0]%s.countBucket]
+// // Сохранить данные по ключу
+func (s *store[t, k, v]) set(shardNum int, key k, data v) error {
+	sh := s.shards[shardNum]
 	now := time.Now()
-	bucket.rw.Lock()
-	defer bucket.rw.Unlock()
+	sh.rw.Lock()
+	defer sh.rw.Unlock()
 
-	if item, ok := bucket.m[key]; ok {
-		if unix := now.UnixNano(); item.isSave && s.unique && unix < item.ttl {
-			return ItemExistsError
-		} else {
+	if item, ok := sh.m[key]; ok {
+		if now.UnixNano() < item.ttl {
 			item.data = data
-			item.isSave = true
-			item.ttl = now.Add(calculateTTL(s.ttl)).UnixNano()
+			item.ttl = now.Add(s.opt.ttl).UnixNano()
 			return nil
-		}
-	}
-
-	return ItemNotFound
-}
-
-// Создать презапись сохранения данных
-func (s *store) Lock(key uuid.UUID) error {
-	bucket := s.m[key[0]%s.countBucket]
-	now := time.Now()
-	bucket.rw.Lock()
-	defer bucket.rw.Unlock()
-
-	if v, ok := bucket.m[key]; ok {
-		if v.isSave {
-			if now.UnixNano() < v.ttl {
-				return LockExistsSaveError
-			}
 		} else {
-			return LockExistsError
+			return ErrItemExists
 		}
 	}
+	sh.m[key] = &item[v]{
+		data: data,
+		ttl:  now.Add(s.opt.ttl).UnixNano(),
+	}
 
-	item := new(storeItem)
-	item.ttl = now.Add(calculateTTL(s.ttlLock)).UnixNano()
-
-	bucket.m[key] = item
 	return nil
 }
 
-// Удалить презапись сохранения данных
-func (s *store) Unlock(key uuid.UUID) {
-	bucket := s.m[key[0]%s.countBucket]
-	bucket.rw.Lock()
-	defer bucket.rw.Unlock()
+// TO-DO: придумать как увиличивать количество шардаов с перестановкой записей и минимальной блокировкой
+// func (s *store[t, k, v]) Grow(count int) {
+// 	s.rw.Lock()
+// 	defer s.rw.Unlock()
 
-	if v, ok := bucket.m[key]; ok {
-		if !v.isSave {
-			delete(bucket.m, key)
-		}
+// 	for _, b := range s.sh {
+// 	}
+// }
+
+func (s *store[t, k, v]) Clear() {
+	s.rw.Lock()
+	defer s.rw.Unlock()
+
+	for _, b := range s.shards {
+		b.m = make(map[k]*item[v], s.opt.minSizeShard)
 	}
+	runtime.GC()
 }
 
-func (s *store) Reset() {
-	for _, b := range s.m {
-		b.m = make(map[uuid.UUID]*storeItem, 128)
-	}
-}
-
-func (s *store) Clear() {
-	for _, b := range s.m {
-		b.m = nil
-	}
-	s.m = nil
+func (s *store[t, k, v]) Stop() {
+	close(s.stop)
 }
 
 // GC
-func (s *store) expireDelete() {
-	now := time.Now().UnixNano()
-	for _, b := range s.m {
-		b.rw.Lock()
-		for key, item := range b.m {
-			if item.ttl >= now {
-				delete(b.m, key)
+func (s *store[t, k, v]) expireDelete() {
+	for {
+		select {
+		case <-s.stop:
+			return
+		case now := <-time.After(s.opt.expireDelay):
+			for _, b := range s.shards {
+				b.expireDelete(now.UnixNano())
 			}
 		}
-		b.rw.Unlock()
 	}
+}
+
+func (b *shard[t, k, v]) expireDelete(now int64) {
+	b.rw.Lock()
+	defer b.rw.Unlock()
+	for key, item := range b.m {
+		if item.ttl < now {
+			delete(b.m, key)
+		}
+	}
+}
+
+// Расчет номера шарда исходя их ключа и его типа
+
+func shardNum[k keyNum](countShard int, in k) int {
+	return int(in) % countShard
+}
+
+func shardSeq[t keyNum, k keySeq[t]](countShard int, in k) int {
+	var out int
+	for i := 0; i < len(in); i++ {
+		out += int(in[i])
+	}
+	return shardNum(countShard, out)
+}
+
+func shardStr[k keyStr](countShard int, in k) int {
+	var out int
+	for i := 0; i < len(in); i++ {
+		out += int(in[i])
+	}
+	return shardNum(countShard, out)
 }

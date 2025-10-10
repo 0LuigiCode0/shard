@@ -1,5 +1,5 @@
-module github.com/0LuigiCode0/idmpt
+module github.com/0LuigiCode0/shard
 
-go 1.20
+go 1.25
 
-require github.com/google/uuid v1.3.0
+require github.com/google/uuid v1.6.0

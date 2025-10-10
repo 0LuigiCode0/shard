@@ -1,10 +1,6 @@
-package idmpt
+package shard
 
-import (
-	"math/rand"
-	"time"
-)
-
-func calculateTTL(ttl time.Duration) time.Duration {
-	return time.Duration(float64(ttl) * (0.99 + (rand.Float64() / 50)))
+func def[v any]() v {
+	out := new(v)
+	return *out
 }
