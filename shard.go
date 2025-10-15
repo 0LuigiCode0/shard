@@ -7,11 +7,14 @@ type iStore[k, v any] interface {
 	Get(key k) (data v, err error)
 	// Сохранить данные по ключу
 	Set(key k, data v) error
-	// Grow(count int)
+	// Изменят количество шардов с пересчетом ключей
+	Resize(countShards int)
 	// Чистит записи в шардах
 	Clear()
 	// Останавливает удаление по ttl
 	Stop()
+
+	print()
 }
 
 type (
@@ -37,7 +40,7 @@ func NewStoreStr[k keyStr, v any](opts ...fOption) IStoreStr[k, v] {
 
 func newStore[t keyNum, k _key[t], v any](opts []fOption) *store[t, k, v] {
 	s := new(store[t, k, v])
-	s.opt.countShard = countShard
+	s.opt.countShards = countShards
 	s.opt.minSizeShard = sizeShard
 	s.opt.ttl = ttl
 	s.opt.expireDelay = expireDelay
@@ -46,12 +49,7 @@ func newStore[t keyNum, k _key[t], v any](opts []fOption) *store[t, k, v] {
 	for _, opt := range opts {
 		opt(&s.opt)
 	}
-	s.shards = make([]*shard[t, k, v], s.opt.countShard)
-	for i := 0; i < s.opt.countShard; i++ {
-		s.shards[i] = &shard[t, k, v]{
-			m: make(map[k]*item[v], s.opt.minSizeShard),
-		}
-	}
+	s.shards = s.makeShards(s.opt.countShards, s.opt.minSizeShard)
 
 	go s.expireDelete()
 	return s

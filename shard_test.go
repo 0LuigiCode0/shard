@@ -2,6 +2,7 @@ package shard
 
 import (
 	"math/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,13 +12,12 @@ import (
 func TestStoreNum(t *testing.T) {
 	type x int
 
-	s := NewStoreNum[x, string](SetTTL(time.Second*5), SetShard(3), SetExpireDelay(time.Second))
+	s := NewStoreNum[x, string](SetTTL(time.Second*5), SetCountShards(3), SetExpireDelay(time.Second))
 	t.Log(s.Set(4, "hello"))
 	t.Log(s.Set(2, "world"))
 	t.Log(s.Get(4))
 	t.Log(s.Get(2))
 	s.Stop()
-	_ = s
 }
 
 func TestStoreSeq(t *testing.T) {
@@ -29,7 +29,6 @@ func TestStoreSeq(t *testing.T) {
 	t.Log(s.Get(u1))
 	t.Log(s.Get(u2))
 	s.Stop()
-	_ = s
 }
 
 func TestStoreStr(t *testing.T) {
@@ -39,11 +38,35 @@ func TestStoreStr(t *testing.T) {
 	t.Log(s.Get("two"))
 	t.Log(s.Get("one"))
 	s.Stop()
-	_ = s
+}
+
+func TestResize(t *testing.T) {
+	wg := sync.WaitGroup{}
+	s := NewStoreNum[int, string](SetCountShards(20), SetTTL(time.Second*5))
+	rand.New(rand.NewSource(42))
+
+	t.Log(s.Set(4, "hello"))
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range 3000 {
+			s.Set(rand.Int(), "hello")
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	time.Sleep(time.Second)
+	s.print()
+	s.Resize(10)
+	s.print()
+	t.Log(s.Get(4))
+
+	s.Stop()
+	wg.Wait()
 }
 
 func BenchmarkStoreNum(b *testing.B) {
-	s := NewStoreNum[int, string](SetMinSizeShard(1000), SetTTL(time.Second*6), SetShard(1000), SetExpireDelay(time.Second*3))
+	s := NewStoreNum[int, string](SetMinSizeShard(1000), SetTTL(time.Second*6), SetCountShards(10000), SetExpireDelay(time.Second*3))
 	defer s.Stop()
 	rand.New(rand.NewSource(42))
 
@@ -55,7 +78,7 @@ func BenchmarkStoreNum(b *testing.B) {
 }
 
 func BenchmarkMap(b *testing.B) {
-	s := newTestMap(1000 * 1000)
+	s := newTestMap(10000 * 1000)
 	rand.New(rand.NewSource(42))
 
 	b.RunParallel(func(p *testing.PB) {

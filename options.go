@@ -6,7 +6,7 @@ type fOption func(s *option)
 
 type option struct {
 	ttl          time.Duration
-	countShard   int
+	countShards  int
 	minSizeShard int
 	expireDelay  time.Duration
 }
@@ -19,9 +19,9 @@ func SetTTL(ttl time.Duration) fOption {
 }
 
 // Устанавливает количество шардаов
-func SetShard(count int) fOption {
+func SetCountShards(count int) fOption {
 	return func(o *option) {
-		o.countShard = count
+		o.countShards = count
 	}
 }
 
