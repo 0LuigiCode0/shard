@@ -14,7 +14,7 @@ type iStore[k, v any] interface {
 	// Останавливает удаление по ttl
 	Stop()
 
-	print()
+	// Print()
 }
 
 type (

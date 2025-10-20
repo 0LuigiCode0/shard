@@ -21,7 +21,7 @@ func newTestMap(size int) *testMap {
 	}
 }
 
-func (tm *testMap) set(key int, data string) {
+func (tm *testMap) Set(key int, data string) {
 	now := time.Now()
 	tm.rw.Lock()
 	defer tm.rw.Unlock()
@@ -34,7 +34,7 @@ func (tm *testMap) set(key int, data string) {
 	tm.m[key] = &it{data: data, ttl: now.Add(time.Second).UnixNano()}
 }
 
-func (tm *testMap) get(key int) string {
+func (tm *testMap) Get(key int) string {
 	tm.rw.RLock()
 	defer tm.rw.RUnlock()
 

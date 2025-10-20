@@ -26,7 +26,7 @@ func SetCountShards(count int) fOption {
 }
 
 // Устанавливает начальный размер шардаов
-func SetMinSizeShard(size int) fOption {
+func SetStartSizeShard(size int) fOption {
 	return func(o *option) {
 		o.minSizeShard = size
 	}

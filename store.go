@@ -1,9 +1,9 @@
 package shard
 
 import (
-	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -33,25 +33,32 @@ type (
 // MARK:Типы хранилищ
 // -------------------------------------------------------------------------- //
 
+type rwLocker struct {
+	locked  uint32
+	rlocked int64
+}
+
 type item[v any] struct {
 	data v
 	ttl  int64
 }
 
 type shard[t keyNum, k _key[t], v any] struct {
-	m  map[k]*item[v]
-	rw sync.RWMutex
+	rw rwLocker
 
+	m     map[k]*item[v]
 	count int
 }
 
 type shards[t keyNum, k _key[t], v any] []*shard[t, k, v]
 
 type store[t keyNum, k _key[t], v any] struct {
+	rw sync.RWMutex
+
 	shards       shards[t, k, v]
 	resizeShards shards[t, k, v]
-	rw           sync.RWMutex
-	stop         chan struct{}
+
+	stop chan struct{}
 
 	opt option
 }
@@ -63,50 +70,72 @@ type (
 )
 
 // -------------------------------------------------------------------------- //
+// MARK:Lock/Unlock
+// -------------------------------------------------------------------------- //
+
+func (rw *rwLocker) lock() {
+	for {
+		for range 4 {
+			if atomic.CompareAndSwapUint32(&rw.locked, 0, 1) {
+				for atomic.LoadInt64(&rw.rlocked) != 0 {
+				}
+				return
+			}
+		}
+		runtime.Gosched()
+	}
+}
+
+func (rw *rwLocker) unlock() {
+	atomic.StoreUint32(&rw.locked, 0)
+}
+
+func (rw *rwLocker) rLock() {
+	for {
+		for range 4 {
+			if atomic.LoadUint32(&rw.locked) == 0 {
+				atomic.AddInt64(&rw.rlocked, 1)
+				if atomic.LoadUint32(&rw.locked) == 0 {
+					return
+				}
+				atomic.AddInt64(&rw.rlocked, -1)
+			}
+		}
+		runtime.Gosched()
+	}
+}
+
+func (rw *rwLocker) rUnlock() {
+	atomic.AddInt64(&rw.rlocked, -1)
+}
+
+// -------------------------------------------------------------------------- //
 // MARK:Get/Set
 // -------------------------------------------------------------------------- //
 
-func (s *storeNum[k, v]) Get(key k) (data v, err error) {
-	return s.shards.get(s.getIndex, key)
-}
+func (s *storeNum[k, v]) Get(key k) (data v, err error)    { return s.shards.get(s.getIndex, key) }
+func (s *storeSeq[t, k, v]) Get(key k) (data v, err error) { return s.shards.get(s.getIndex, key) }
+func (s *storeStr[k, v]) Get(key k) (data v, err error)    { return s.shards.get(s.getIndex, key) }
 
-func (s *storeSeq[t, k, v]) Get(key k) (data v, err error) {
-	return s.shards.get(s.getIndex, key)
-}
+func (s *storeNum[k, v]) Set(key k, data v) error    { return s.set(s.getIndex, key, data) }
+func (s *storeSeq[t, k, v]) Set(key k, data v) error { return s.set(s.getIndex, key, data) }
+func (s *storeStr[k, v]) Set(key k, data v) error    { return s.set(s.getIndex, key, data) }
 
-func (s *storeStr[k, v]) Get(key k) (data v, err error) {
-	return s.shards.get(s.getIndex, key)
-}
-
-func (s *storeNum[k, v]) Set(key k, data v) error {
+func (s *store[t, k, v]) set(f fGetIndex[t, k, v], key k, data v) error {
 	if s.resizeShards != nil {
-		s.resizeShards.set(s.getIndex, key, s.opt.ttl, data)
+		s.resizeShards.set(f, key, s.opt.ttl, data)
 	}
-	return s.shards.set(s.getIndex, key, s.opt.ttl, data)
+	return s.shards.set(f, key, s.opt.ttl, data)
 }
 
-func (s *storeSeq[t, k, v]) Set(key k, data v) error {
-	if s.resizeShards != nil {
-		s.resizeShards.set(s.getIndex, key, s.opt.ttl, data)
-	}
-	return s.shards.set(s.getIndex, key, s.opt.ttl, data)
-}
+func (shs *shards[t, k, v]) get(f fGetIndex[t, k, v], key k) (data v, err error) {
+	sh := (*shs)[f(len(*shs), key)]
 
-func (s *storeStr[k, v]) Set(key k, data v) error {
-	if s.resizeShards != nil {
-		s.resizeShards.set(s.getIndex, key, s.opt.ttl, data)
-	}
-	return s.shards.set(s.getIndex, key, s.opt.ttl, data)
-}
-
-func (s shards[t, k, v]) get(getIndex fGetIndex[t, k, v], key k) (data v, err error) {
-	sh := s[getIndex(len(s), key)]
-	now := time.Now()
-	sh.rw.RLock()
-	defer sh.rw.RUnlock()
+	sh.rw.rLock()
+	defer sh.rw.rUnlock()
 
 	if item, ok := sh.m[key]; ok {
-		if now.UnixNano() < item.ttl {
+		if time.Now().UnixNano() < item.ttl {
 			return item.data, nil
 		}
 		return def[v](), ErrItemExpired
@@ -115,22 +144,20 @@ func (s shards[t, k, v]) get(getIndex fGetIndex[t, k, v], key k) (data v, err er
 	return def[v](), ErrItemNotFound
 }
 
-func (s shards[t, k, v]) set(getIndex fGetIndex[t, k, v], key k, ttl time.Duration, data v) error {
-	sh := s[getIndex(len(s), key)]
-	now := time.Now()
-	sh.rw.Lock()
-	defer sh.rw.Unlock()
+func (shs *shards[t, k, v]) set(f fGetIndex[t, k, v], key k, ttl time.Duration, data v) error {
+	sh := (*shs)[f(len(*shs), key)]
 
-	if item, ok := sh.m[key]; ok {
-		item.data = data
-		item.ttl = now.Add(ttl).UnixNano()
-		return nil
+	sh.rw.lock()
+	defer sh.rw.unlock()
+
+	it := sh.m[key]
+	if it == nil {
+		it = new(item[v])
+		sh.m[key] = it
+		sh.count++
 	}
-	sh.m[key] = &item[v]{
-		data: data,
-		ttl:  now.Add(ttl).UnixNano(),
-	}
-	sh.count++
+	it.data = data
+	it.ttl = time.Now().Add(ttl).UnixNano()
 
 	return nil
 }
@@ -154,12 +181,13 @@ func (s *store[t, k, v]) resize(getIndex fGetIndex[t, k, v], countShards int) {
 		oldSh.fillShards(getIndex, s.resizeShards)
 	}
 
+	s.opt.countShards = countShards
 	s.swapShards()
 }
 
 func (sh *shard[t, k, v]) fillShards(getIndex fGetIndex[t, k, v], resizeShards shards[t, k, v]) {
-	sh.rw.RLock()
-	defer sh.rw.RUnlock()
+	sh.rw.rLock()
+	defer sh.rw.rUnlock()
 
 	for key, it := range sh.m {
 		newSh := resizeShards[getIndex(len(resizeShards), key)]
@@ -168,8 +196,8 @@ func (sh *shard[t, k, v]) fillShards(getIndex fGetIndex[t, k, v], resizeShards s
 }
 
 func (sh *shard[t, k, v]) itemSet(key k, it *item[v]) {
-	sh.rw.Lock()
-	defer sh.rw.Unlock()
+	sh.rw.lock()
+	defer sh.rw.unlock()
 
 	if _, ok := sh.m[key]; !ok {
 		sh.m[key] = it
@@ -203,8 +231,9 @@ func (s *store[t, k, v]) expireDelete() {
 }
 
 func (sh *shard[t, k, v]) expireDelete(now int64) {
-	sh.rw.Lock()
-	defer sh.rw.Unlock()
+	sh.rw.lock()
+	defer sh.rw.unlock()
+
 	for key, item := range sh.m {
 		if item.ttl < now {
 			delete(sh.m, key)
@@ -270,15 +299,15 @@ func (s *store[t, k, v]) makeShards(countShards, minSizeShard int) []*shard[t, k
 	return shards
 }
 
-func (s *store[t, k, v]) print() {
-	s.rw.RLock()
-	defer s.rw.RUnlock()
-	fmt.Println("shards ", len(s.shards))
-	for i, sh := range s.shards {
-		fmt.Print("shard ", i, "_", sh.count, " / ")
-	}
-	fmt.Println("\nresize shards ", len(s.resizeShards))
-	for i, sh := range s.resizeShards {
-		fmt.Print("shard ", i, "_", sh.count, "/ ")
-	}
-}
+// func (s *store[t, k, v]) Print() {
+// 	s.rw.RLock()
+// 	defer s.rw.RUnlock()
+// 	fmt.Println("shards ", len(s.shards))
+// 	for i, sh := range s.shards {
+// 		fmt.Print("shard ", i, "_", sh.count, " / ")
+// 	}
+// 	fmt.Println("\nresize shards ", len(s.resizeShards))
+// 	for i, sh := range s.resizeShards {
+// 		fmt.Print("shard ", i, "_", sh.count, "/ ")
+// 	}
+// }
