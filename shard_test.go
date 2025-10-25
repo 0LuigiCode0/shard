@@ -1,14 +1,20 @@
 package shard
 
 import (
+	"fmt"
 	"math/rand"
 	"runtime"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/0LuigiCode0/shard/spinner"
 	"github.com/google/uuid"
 )
+
+// -------------------------------------------------------------------------- //
+// MARK: Test
+// -------------------------------------------------------------------------- //
 
 func TestStoreNum(t *testing.T) {
 	type x int
@@ -19,6 +25,8 @@ func TestStoreNum(t *testing.T) {
 	t.Log(s.Get(4))
 	t.Log(s.Get(2))
 	s.Stop()
+	// timeSleep(int64(time.Second))
+	fmt.Println()
 }
 
 func TestStoreSeq(t *testing.T) {
@@ -42,7 +50,6 @@ func TestStoreStr(t *testing.T) {
 }
 
 func TestResize(t *testing.T) {
-	uuid.SetRand(rand.New(rand.NewSource(time.Now().Unix())))
 	u1 := uuid.New()
 	u2 := uuid.New()
 
@@ -67,7 +74,7 @@ func TestResize(t *testing.T) {
 }
 
 func TestResizeGO(t *testing.T) {
-	runtime.GOMAXPROCS(6)
+	// runtime.GOMAXPROCS(6)
 	wg := sync.WaitGroup{}
 
 	s := NewStoreNum[int32, string](SetCountShards(20), SetStartSizeShard(1000))
@@ -99,11 +106,17 @@ func TestResizeGO(t *testing.T) {
 	// s.Print()
 }
 
-func BenchmarkStoreNum(b *testing.B) {
-	runtime.GOMAXPROCS(4)
-	wg := sync.WaitGroup{}
+// -------------------------------------------------------------------------- //
+// MARK:Bench
+// -------------------------------------------------------------------------- //
 
-	s := NewStoreNum[int32, string](SetCountShards(1000), SetStartSizeShard(1000))
+const cpu = 4
+
+func BenchmarkShardInt(b *testing.B) {
+	runtime.GOMAXPROCS(cpu)
+
+	wg := sync.WaitGroup{}
+	s := NewStoreNum[int32, string](SetCountShards(100), SetStartSizeShard(10000))
 	s.Stop()
 
 	b.ResetTimer()
@@ -131,11 +144,11 @@ func BenchmarkStoreNum(b *testing.B) {
 	wg.Wait()
 }
 
-func BenchmarkMap(b *testing.B) {
-	runtime.GOMAXPROCS(4)
+func BenchmarkMapIntSpinner(b *testing.B) {
+	runtime.GOMAXPROCS(cpu)
 
 	wg := sync.WaitGroup{}
-	s := newTestMap(1000 * 1000)
+	s := newTestMap[byte, int32](1000*1000, &spinner.Spinner{})
 
 	b.ResetTimer()
 	b.StopTimer()
@@ -146,7 +159,7 @@ func BenchmarkMap(b *testing.B) {
 		defer wg.Done()
 		b.RunParallel(func(p *testing.PB) {
 			for p.Next() {
-				s.Set(rand.Intn(1000000), "hello")
+				s.Set(rand.Int31n(1000000), "hello")
 			}
 		})
 	}()
@@ -155,7 +168,132 @@ func BenchmarkMap(b *testing.B) {
 		defer wg.Done()
 		b.RunParallel(func(p *testing.PB) {
 			for p.Next() {
-				s.Get(rand.Intn(1000000))
+				s.Get(rand.Int31n(1000000))
+			}
+		})
+	}()
+	wg.Wait()
+}
+
+func BenchmarkMapIntMutex(b *testing.B) {
+	runtime.GOMAXPROCS(cpu)
+
+	wg := sync.WaitGroup{}
+	s := newTestMap[byte, int32](1000*1000, &sync.RWMutex{})
+
+	b.ResetTimer()
+	b.StopTimer()
+	b.StartTimer()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.RunParallel(func(p *testing.PB) {
+			for p.Next() {
+				s.Set(rand.Int31n(1000000), "hello")
+			}
+		})
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.RunParallel(func(p *testing.PB) {
+			for p.Next() {
+				s.Get(rand.Int31n(1000000))
+			}
+		})
+	}()
+	wg.Wait()
+}
+
+func BenchmarkShardUUID(b *testing.B) {
+	runtime.GOMAXPROCS(cpu)
+
+	wg := sync.WaitGroup{}
+	s := NewStoreSeq[byte, uuid.UUID, string](SetCountShards(100), SetStartSizeShard(10000))
+	s.Stop()
+
+	b.ResetTimer()
+	b.StopTimer()
+	b.StartTimer()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.RunParallel(func(p *testing.PB) {
+			for p.Next() {
+				s.Set(uuid.New(), "hello")
+			}
+		})
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.RunParallel(func(p *testing.PB) {
+			for p.Next() {
+				s.Get(uuid.New())
+			}
+		})
+	}()
+	wg.Wait()
+}
+
+func BenchmarkMapUUIDSpinner(b *testing.B) {
+	runtime.GOMAXPROCS(cpu)
+
+	wg := sync.WaitGroup{}
+	s := newTestMap[byte, uuid.UUID](1000*1000, &spinner.Spinner{})
+
+	b.ResetTimer()
+	b.StopTimer()
+	b.StartTimer()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.RunParallel(func(p *testing.PB) {
+			for p.Next() {
+				s.Set(uuid.New(), "hello")
+			}
+		})
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.RunParallel(func(p *testing.PB) {
+			for p.Next() {
+				s.Get(uuid.New())
+			}
+		})
+	}()
+	wg.Wait()
+}
+
+func BenchmarkMapUUIDMutex(b *testing.B) {
+	runtime.GOMAXPROCS(cpu)
+
+	wg := sync.WaitGroup{}
+	s := newTestMap[byte, uuid.UUID](1000*1000, &sync.RWMutex{})
+
+	b.ResetTimer()
+	b.StopTimer()
+	b.StartTimer()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.RunParallel(func(p *testing.PB) {
+			for p.Next() {
+				s.Set(uuid.New(), "hello")
+			}
+		})
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.RunParallel(func(p *testing.PB) {
+			for p.Next() {
+				s.Get(uuid.New())
 			}
 		})
 	}()

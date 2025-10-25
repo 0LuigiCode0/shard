@@ -3,8 +3,9 @@ package shard
 import (
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"github.com/0LuigiCode0/shard/spinner"
 )
 
 // -------------------------------------------------------------------------- //
@@ -33,18 +34,13 @@ type (
 // MARK:Типы хранилищ
 // -------------------------------------------------------------------------- //
 
-type rwLocker struct {
-	locked  uint32
-	rlocked int64
-}
-
 type item[v any] struct {
 	data v
 	ttl  int64
 }
 
 type shard[t keyNum, k _key[t], v any] struct {
-	rw rwLocker
+	rw spinner.Spinner
 
 	m     map[k]*item[v]
 	count int
@@ -70,52 +66,12 @@ type (
 )
 
 // -------------------------------------------------------------------------- //
-// MARK:Lock/Unlock
-// -------------------------------------------------------------------------- //
-
-func (rw *rwLocker) lock() {
-	for {
-		for range 4 {
-			if atomic.CompareAndSwapUint32(&rw.locked, 0, 1) {
-				for atomic.LoadInt64(&rw.rlocked) != 0 {
-				}
-				return
-			}
-		}
-		runtime.Gosched()
-	}
-}
-
-func (rw *rwLocker) unlock() {
-	atomic.StoreUint32(&rw.locked, 0)
-}
-
-func (rw *rwLocker) rLock() {
-	for {
-		for range 4 {
-			if atomic.LoadUint32(&rw.locked) == 0 {
-				atomic.AddInt64(&rw.rlocked, 1)
-				if atomic.LoadUint32(&rw.locked) == 0 {
-					return
-				}
-				atomic.AddInt64(&rw.rlocked, -1)
-			}
-		}
-		runtime.Gosched()
-	}
-}
-
-func (rw *rwLocker) rUnlock() {
-	atomic.AddInt64(&rw.rlocked, -1)
-}
-
-// -------------------------------------------------------------------------- //
 // MARK:Get/Set
 // -------------------------------------------------------------------------- //
 
-func (s *storeNum[k, v]) Get(key k) (data v, err error)    { return s.shards.get(s.getIndex, key) }
-func (s *storeSeq[t, k, v]) Get(key k) (data v, err error) { return s.shards.get(s.getIndex, key) }
-func (s *storeStr[k, v]) Get(key k) (data v, err error)    { return s.shards.get(s.getIndex, key) }
+func (s *storeNum[k, v]) Get(key k) (data v, err error)    { return s.get(s.getIndex, key) }
+func (s *storeSeq[t, k, v]) Get(key k) (data v, err error) { return s.get(s.getIndex, key) }
+func (s *storeStr[k, v]) Get(key k) (data v, err error)    { return s.get(s.getIndex, key) }
 
 func (s *storeNum[k, v]) Set(key k, data v) error    { return s.set(s.getIndex, key, data) }
 func (s *storeSeq[t, k, v]) Set(key k, data v) error { return s.set(s.getIndex, key, data) }
@@ -128,36 +84,39 @@ func (s *store[t, k, v]) set(f fGetIndex[t, k, v], key k, data v) error {
 	return s.shards.set(f, key, s.opt.ttl, data)
 }
 
-func (shs *shards[t, k, v]) get(f fGetIndex[t, k, v], key k) (data v, err error) {
-	sh := (*shs)[f(len(*shs), key)]
-
-	sh.rw.rLock()
-	defer sh.rw.rUnlock()
-
-	if item, ok := sh.m[key]; ok {
+func (s *store[t, k, v]) get(f fGetIndex[t, k, v], key k) (data v, err error) {
+	if item, ok := s.shards.get(f, key); ok {
 		if time.Now().UnixNano() < item.ttl {
 			return item.data, nil
 		}
 		return def[v](), ErrItemExpired
-
 	}
 	return def[v](), ErrItemNotFound
+}
+
+func (shs *shards[t, k, v]) get(f fGetIndex[t, k, v], key k) (it *item[v], ok bool) {
+	sh := (*shs)[f(len(*shs), key)]
+	sh.rw.RLock()
+	defer sh.rw.RUnlock()
+
+	it, ok = sh.m[key]
+	return
 }
 
 func (shs *shards[t, k, v]) set(f fGetIndex[t, k, v], key k, ttl time.Duration, data v) error {
 	sh := (*shs)[f(len(*shs), key)]
 
-	sh.rw.lock()
-	defer sh.rw.unlock()
-
-	it := sh.m[key]
-	if it == nil {
-		it = new(item[v])
-		sh.m[key] = it
-		sh.count++
-	}
+	it := new(item[v])
 	it.data = data
 	it.ttl = time.Now().Add(ttl).UnixNano()
+
+	sh.rw.Lock()
+	defer sh.rw.Unlock()
+
+	if _, ok := sh.m[key]; !ok {
+		sh.count++
+	}
+	sh.m[key] = it
 
 	return nil
 }
@@ -186,8 +145,8 @@ func (s *store[t, k, v]) resize(getIndex fGetIndex[t, k, v], countShards int) {
 }
 
 func (sh *shard[t, k, v]) fillShards(getIndex fGetIndex[t, k, v], resizeShards shards[t, k, v]) {
-	sh.rw.rLock()
-	defer sh.rw.rUnlock()
+	sh.rw.RLock()
+	defer sh.rw.RUnlock()
 
 	for key, it := range sh.m {
 		newSh := resizeShards[getIndex(len(resizeShards), key)]
@@ -196,8 +155,8 @@ func (sh *shard[t, k, v]) fillShards(getIndex fGetIndex[t, k, v], resizeShards s
 }
 
 func (sh *shard[t, k, v]) itemSet(key k, it *item[v]) {
-	sh.rw.lock()
-	defer sh.rw.unlock()
+	sh.rw.Lock()
+	defer sh.rw.Unlock()
 
 	if _, ok := sh.m[key]; !ok {
 		sh.m[key] = it
@@ -218,11 +177,14 @@ func (s *store[t, k, v]) swapShards() {
 // -------------------------------------------------------------------------- //
 
 func (s *store[t, k, v]) expireDelete() {
+	tick := time.NewTicker(s.opt.expireDelay)
+	defer tick.Stop()
+
 	for {
 		select {
 		case <-s.stop:
 			return
-		case now := <-time.After(s.opt.expireDelay):
+		case now := <-tick.C:
 			for _, b := range s.shards {
 				b.expireDelete(now.UnixNano())
 			}
@@ -231,8 +193,8 @@ func (s *store[t, k, v]) expireDelete() {
 }
 
 func (sh *shard[t, k, v]) expireDelete(now int64) {
-	sh.rw.lock()
-	defer sh.rw.unlock()
+	sh.rw.Lock()
+	defer sh.rw.Unlock()
 
 	for key, item := range sh.m {
 		if item.ttl < now {

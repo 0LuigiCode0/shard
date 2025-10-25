@@ -1,6 +1,10 @@
 package shard
 
-import "time"
+import (
+	"time"
+
+	"github.com/0LuigiCode0/shard/spinner"
+)
 
 type fOption func(s *option)
 
@@ -36,5 +40,17 @@ func SetStartSizeShard(size int) fOption {
 func SetExpireDelay(delay time.Duration) fOption {
 	return func(o *option) {
 		o.expireDelay = delay
+	}
+}
+
+func SetLoopCount(count int) fOption {
+	return func(_ *option) {
+		spinner.SetLoopCount(count)
+	}
+}
+
+func SetSpinCount(count int32) fOption {
+	return func(_ *option) {
+		spinner.SetSpinCount(count)
 	}
 }

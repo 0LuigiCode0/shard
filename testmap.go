@@ -1,40 +1,49 @@
 package shard
 
 import (
-	"sync"
 	"time"
 )
 
-type testMap struct {
-	m  map[int]*it
-	rw sync.RWMutex
+type locker interface {
+	Lock()
+	Unlock()
+	RLock()
+	RUnlock()
 }
 
-type it struct {
+type testMap[t keyNum, k _key[t]] struct {
+	m     map[k]*testitem
+	rw    locker
+	count int
+}
+
+type testitem struct {
 	data string
 	ttl  int64
 }
 
-func newTestMap(size int) *testMap {
-	return &testMap{
-		m: make(map[int]*it, size),
+func newTestMap[t keyNum, k _key[t]](size int, rw locker) *testMap[t, k] {
+	return &testMap[t, k]{
+		m:  make(map[k]*testitem, size),
+		rw: rw,
 	}
 }
 
-func (tm *testMap) Set(key int, data string) {
-	now := time.Now()
+func (tm *testMap[t, k]) Set(key k, data string) {
+	it := new(testitem)
+	it.data = data
+	it.ttl = time.Now().Add(ttl).UnixNano()
+
 	tm.rw.Lock()
 	defer tm.rw.Unlock()
 
-	if v, ok := tm.m[key]; ok {
-		v.data = data
-		v.ttl = now.Add(time.Second).UnixNano()
-		return
+	if _, ok := tm.m[key]; !ok {
+		tm.count++
 	}
-	tm.m[key] = &it{data: data, ttl: now.Add(time.Second).UnixNano()}
+	tm.m[key] = it
 }
 
-func (tm *testMap) Get(key int) string {
+func (tm *testMap[t, k]) Get(key k) string {
 	tm.rw.RLock()
 	defer tm.rw.RUnlock()
 
