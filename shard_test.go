@@ -45,7 +45,8 @@ func TestStoreSeq(t *testing.T) {
 }
 
 func TestStoreStr(t *testing.T) {
-	s := NewStore[string, string](GetIndexByStr, SetTTL(time.Second*2))
+	type myString string
+	s := NewStore[string](GetIndexByStr[myString], SetTTL(time.Second*2))
 	t.Log(s.Set("one", "hello"))
 	t.Log(s.Set("two", "world"))
 	t.Log(s.Get("two"))
