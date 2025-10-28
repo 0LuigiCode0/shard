@@ -19,20 +19,24 @@ import (
 func TestStoreNum(t *testing.T) {
 	type x int
 
-	s := NewStoreNum[x, string](SetTTL(time.Second*5), SetCountShards(3), SetExpireDelay(time.Second))
+	s := NewStore[string](GetIndexByNum[x],
+		SetTTL(time.Second*5), SetCountShards(3), SetExpireDelay(time.Second))
+
 	t.Log(s.Set(4, "hello"))
 	t.Log(s.Set(2, "world"))
 	t.Log(s.Get(4))
 	t.Log(s.Get(2))
 	s.Stop()
-	// timeSleep(int64(time.Second))
 	fmt.Println()
 }
 
 func TestStoreSeq(t *testing.T) {
 	u1 := uuid.New()
 	u2 := uuid.New()
-	s := NewStoreSeq[byte, uuid.UUID, string](SetStartSizeShard(256))
+
+	s := NewStore[string](GetIndexBySeq[uuid.UUID, byte],
+		SetStartSizeShard(256))
+
 	t.Log(s.Set(u1, "hello"))
 	t.Log(s.Set(u2, "world"))
 	t.Log(s.Get(u1))
@@ -41,7 +45,7 @@ func TestStoreSeq(t *testing.T) {
 }
 
 func TestStoreStr(t *testing.T) {
-	s := NewStoreStr[string, string](SetTTL(time.Second * 2))
+	s := NewStore[string, string](GetIndexByStr, SetTTL(time.Second*2))
 	t.Log(s.Set("one", "hello"))
 	t.Log(s.Set("two", "world"))
 	t.Log(s.Get("two"))
@@ -53,7 +57,7 @@ func TestResize(t *testing.T) {
 	u1 := uuid.New()
 	u2 := uuid.New()
 
-	s := NewStoreSeq[byte, uuid.UUID, string](SetCountShards(8))
+	s := NewStore[string](GetIndexBySeq[uuid.UUID, byte], SetCountShards(8))
 	s.Stop()
 
 	t.Log(s.Set(u1, "hello"))
@@ -77,7 +81,7 @@ func TestResizeGO(t *testing.T) {
 	// runtime.GOMAXPROCS(6)
 	wg := sync.WaitGroup{}
 
-	s := NewStoreNum[int32, string](SetCountShards(20), SetStartSizeShard(1000))
+	s := NewStore[string](GetIndexByNum[int32], SetCountShards(20), SetStartSizeShard(1000))
 	s.Stop()
 
 	s.Set(100001, "world")
@@ -116,7 +120,7 @@ func BenchmarkShardInt(b *testing.B) {
 	runtime.GOMAXPROCS(cpu)
 
 	wg := sync.WaitGroup{}
-	s := NewStoreNum[int32, string](SetCountShards(100), SetStartSizeShard(10000))
+	s := NewStore[string](GetIndexByNum[int32], SetCountShards(100), SetStartSizeShard(10000))
 	s.Stop()
 
 	b.ResetTimer()
@@ -148,7 +152,7 @@ func BenchmarkMapIntSpinner(b *testing.B) {
 	runtime.GOMAXPROCS(cpu)
 
 	wg := sync.WaitGroup{}
-	s := newTestMap[byte, int32](1000*1000, &spinner.Spinner{})
+	s := newTestMap[int32](1000*1000, &spinner.Spinner{})
 
 	b.ResetTimer()
 	b.StopTimer()
@@ -179,7 +183,7 @@ func BenchmarkMapIntMutex(b *testing.B) {
 	runtime.GOMAXPROCS(cpu)
 
 	wg := sync.WaitGroup{}
-	s := newTestMap[byte, int32](1000*1000, &sync.RWMutex{})
+	s := newTestMap[int32](1000*1000, &sync.RWMutex{})
 
 	b.ResetTimer()
 	b.StopTimer()
@@ -210,7 +214,7 @@ func BenchmarkShardUUID(b *testing.B) {
 	runtime.GOMAXPROCS(cpu)
 
 	wg := sync.WaitGroup{}
-	s := NewStoreSeq[byte, uuid.UUID, string](SetCountShards(100), SetStartSizeShard(10000))
+	s := NewStore[string](GetIndexBySeq[uuid.UUID, byte], SetCountShards(100), SetStartSizeShard(10000))
 	s.Stop()
 
 	b.ResetTimer()
@@ -242,7 +246,7 @@ func BenchmarkMapUUIDSpinner(b *testing.B) {
 	runtime.GOMAXPROCS(cpu)
 
 	wg := sync.WaitGroup{}
-	s := newTestMap[byte, uuid.UUID](1000*1000, &spinner.Spinner{})
+	s := newTestMap[uuid.UUID](1000*1000, &spinner.Spinner{})
 
 	b.ResetTimer()
 	b.StopTimer()
@@ -273,7 +277,7 @@ func BenchmarkMapUUIDMutex(b *testing.B) {
 	runtime.GOMAXPROCS(cpu)
 
 	wg := sync.WaitGroup{}
-	s := newTestMap[byte, uuid.UUID](1000*1000, &sync.RWMutex{})
+	s := newTestMap[uuid.UUID](1000*1000, &sync.RWMutex{})
 
 	b.ResetTimer()
 	b.StopTimer()

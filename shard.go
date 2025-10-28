@@ -1,8 +1,6 @@
-// Реализация подхода когда данные хранятся не в одной мапе, а поделены на шарды.
-// Предлагается 3 основных типа ключей: числа, массивы, строки
 package shard
 
-type iStore[k, v any] interface {
+type IStore[k comparable, v any] interface {
 	// Получить данные по ключу
 	Get(key k) (data v, err error)
 	// Сохранить данные по ключу
@@ -17,34 +15,15 @@ type iStore[k, v any] interface {
 	// Print()
 }
 
-type (
-	IStoreNum[k keyNum, v any]              interface{ iStore[k, v] }
-	IStoreSeq[t keyNum, k keySeq[t], v any] interface{ iStore[k, v] }
-	IStoreStr[k keyStr, v any]              interface{ iStore[k, v] }
-)
-
-// Хранилище где ключ это все числовые значения
-func NewStoreNum[k keyNum, v any](opts ...fOption) IStoreNum[k, v] {
-	return &storeNum[k, v]{*newStore[k, k, v](opts)}
-}
-
-// Хранилище где ключ это массивы с любыми числовые значениями и размером до 32
-func NewStoreSeq[t keyNum, k keySeq[t], v any](opts ...fOption) IStoreSeq[t, k, v] {
-	return &storeSeq[t, k, v]{*newStore[t, k, v](opts)}
-}
-
-// Хранилище где ключ это строка
-func NewStoreStr[k keyStr, v any](opts ...fOption) IStoreStr[k, v] {
-	return &storeStr[k, v]{*newStore[byte, k, v](opts)}
-}
-
-func newStore[t keyNum, k _key[t], v any](opts []fOption) *store[t, k, v] {
-	s := new(store[t, k, v])
+func NewStore[v any, k comparable](fGetIndex fGetIndex[k], opts ...fOption) IStore[k, v] {
+	s := new(store[k, v])
 	s.opt.countShards = countShards
 	s.opt.minSizeShard = sizeShard
 	s.opt.ttl = ttl
 	s.opt.expireDelay = expireDelay
 	s.stop = make(chan struct{})
+
+	s.fGetIndex = fGetIndex
 
 	for _, opt := range opts {
 		opt(&s.opt)

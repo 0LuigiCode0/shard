@@ -11,7 +11,7 @@ type locker interface {
 	RUnlock()
 }
 
-type testMap[t keyNum, k _key[t]] struct {
+type testMap[k comparable] struct {
 	m     map[k]*testitem
 	rw    locker
 	count int
@@ -22,14 +22,14 @@ type testitem struct {
 	ttl  int64
 }
 
-func newTestMap[t keyNum, k _key[t]](size int, rw locker) *testMap[t, k] {
-	return &testMap[t, k]{
+func newTestMap[k comparable](size int, rw locker) *testMap[k] {
+	return &testMap[k]{
 		m:  make(map[k]*testitem, size),
 		rw: rw,
 	}
 }
 
-func (tm *testMap[t, k]) Set(key k, data string) {
+func (tm *testMap[k]) Set(key k, data string) {
 	it := new(testitem)
 	it.data = data
 	it.ttl = time.Now().Add(ttl).UnixNano()
@@ -43,7 +43,7 @@ func (tm *testMap[t, k]) Set(key k, data string) {
 	tm.m[key] = it
 }
 
-func (tm *testMap[t, k]) Get(key k) string {
+func (tm *testMap[k]) Get(key k) string {
 	tm.rw.RLock()
 	defer tm.rw.RUnlock()
 
