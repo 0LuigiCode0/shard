@@ -1,9 +1,12 @@
 #include "textflag.h"
    
-TEXT ·spin(SB), NOSPLIT, $0-4
-   MOVL cycle+0(FP), AX
+TEXT ·spin(SB), NOSPLIT, $0-1
+   MOVB cycle+0(FP), AX
+   CMPB AX, $0
+   JZ ret
 loop:
    PAUSE
-   SUBL $1, AX
+   SUBB $1, AX
    JNZ loop
+ret:
    RET

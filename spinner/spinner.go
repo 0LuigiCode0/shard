@@ -16,40 +16,31 @@ type Spinner struct {
 
 	locked  uint32
 	rlocked int64
+
+	LoopCount byte
+	SpinCount byte
 }
 
-func spin(cycle int32)
+func spin(cycle byte)
+
+func NewSpinner(loopCount, spinCount byte) Spinner {
+	return Spinner{LoopCount: loopCount, SpinCount: spinCount}
+}
 
 // -------------------------------------------------------------------------- //
 // MARK:Lock/Unlock
 // -------------------------------------------------------------------------- //
 
-var (
-	loopCount int
-	spinCount int32 = 2
-)
-
-func init() {
-	cpus := runtime.NumCPU()
-	if cpus < 4 {
-		cpus = 4
-	}
-	loopCount = cpus
-}
-
-func SetLoopCount(count int)   { loopCount = count }
-func SetSpinCount(count int32) { spinCount = count }
-
 func (s *Spinner) Lock() {
 	for {
-		for range loopCount {
+		for range s.LoopCount {
 			if s.locked == 0 && atomic.CompareAndSwapUint32(&s.locked, 0, 1) {
 				for s.rlocked != 0 {
-					spin(spinCount)
+					spin(s.SpinCount)
 				}
 				return
 			}
-			spin(spinCount)
+			spin(s.SpinCount)
 		}
 		runtime.Gosched()
 	}
@@ -61,16 +52,16 @@ func (s *Spinner) Unlock() {
 
 func (s *Spinner) RLock() {
 	for {
-		for range loopCount {
+		for range s.LoopCount {
 			if s.locked == 0 {
 				atomic.AddInt64(&s.rlocked, 1)
-				spin(spinCount)
+				spin(s.SpinCount)
 				if s.locked == 0 {
 					return
 				}
 				atomic.AddInt64(&s.rlocked, -1)
 			}
-			spin(spinCount)
+			spin(s.SpinCount)
 		}
 		runtime.Gosched()
 	}
