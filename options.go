@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"reflect"
 	"runtime"
 	"time"
 )
@@ -23,6 +24,11 @@ func Option[k comparable]() *option[k] {
 		cpus = 4
 	}
 
+	fGetIndex := getIndex[k]
+	if reflect.TypeFor[k]().Kind() == reflect.String {
+		fGetIndex = getIndexStr[k]
+	}
+
 	return &option[k]{
 		countShards:  countShards,
 		minSizeShard: sizeShard,
@@ -30,7 +36,7 @@ func Option[k comparable]() *option[k] {
 		expireDelay:  expireDelay,
 		loopCount:    byte(cpus),
 		spinCount:    2,
-		fGetIndex:    getIndex[k],
+		fGetIndex:    fGetIndex,
 	}
 }
 
